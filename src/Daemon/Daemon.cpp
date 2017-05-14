@@ -232,6 +232,73 @@ int main(int argc, char* argv[])
     ccore.load();
     logger(INFO) << "Core initialized OK";
 
+    //create a map to store, this is like the top global index
+    std::map<uint64_t, uint64_t> availableMixinsMap;
+
+    int block_start = 1; 
+    //int block_stop = ccore.getTopBlockIndex();
+    //int block_start = 1234568;
+    int block_stop = 1000;
+    logger(INFO) << "The top block index is: " << block_stop;
+
+    for (int block_height = block_start; block_height <= block_stop; block_height++){
+        auto blocks = ccore.getBlockByIndex(block_height);
+        uint64_t tx_timestamp = blocks.timestamp;
+
+        //extract the coinbase transaction
+        Transaction coinbase_tx = blocks.baseTransaction;
+        std::vector<TransactionOutput> coinbase_tx_output = coinbase_tx.outputs;
+
+        //update the available 
+        for (auto coinbase_track = coinbase_tx_output.begin(); coinbase_track != coinbase_tx_output.end(); ++coinbase_track){
+            uint64_t coinbase_amount = coinbase_track->amount;
+            availableMixinsMap[coinbase_amount]++;
+        }
+
+        //iterate through the rest of the transactions
+        auto transactions = blocks.transactionHashes;
+        for (auto i = transactions.begin(); i != transactions.end(); ++i){
+            //for each transaction get the details
+            TransactionDetails tx_details = ccore.getTransactionDetails(*i);
+            uint64_t num_mixin = tx_details.mixin;
+
+            std::vector<TransactionInputDetails> tx_inputs = tx_details.inputs;
+
+            for (auto input_tracker = tx_inputs.begin(); input_tracker != tx_inputs.end(); ++input_tracker){
+                KeyInputDetails keyin = boost::get<KeyInputDetails>(*input_tracker);
+                KeyInput input = keyin.input;
+                uint64_t amount = input.amount;
+
+                //get the transaction where the mixin comes from
+                //this only works for 1-mixin inputs
+                TransactionOutputReferenceDetails tx_out_details = keyin.output;
+                std::cout << "Output reference hash: " << tx_out_details.transactionHash << '\n';
+                //std::cout << "Output reference number: " << tx_out_details.number << '\n';
+
+                std::vector<uint32_t> outputIndexes = input.outputIndexes;
+                std::cout << "Transaction Hash: " << *i << '\n';
+                std::cout << "Input Amount: " << amount << '\n';
+                for (auto index_tracker = outputIndexes.begin(); index_tracker != outputIndexes.end(); ++index_tracker){
+                  //add 1 to prevent 0s from appearing, 
+                  std::cout << "Index: " << (*index_tracker)+1 << '\n';
+                }
+            }
+            std::vector<TransactionOutputDetails> tx_outputs = tx_details.outputs;
+            for (auto output_track = tx_outputs.begin(); output_track != tx_outputs.end(); ++output_track){
+              uint64_t output_amount = (output_track->output).amount;
+              uint64_t output_gidx = output_track->globalIndex;
+              availableMixinsMap[output_amount]=output_gidx;
+            }
+        }
+
+    //availableMixinsMap[tx_out.amount]++;
+
+    }
+    logger(INFO) << "I am stopping here, bye.";
+    return 0;
+
+
+
     CryptoNote::CryptoNoteProtocolHandler cprotocol(currency, dispatcher, ccore, nullptr, logManager);
     CryptoNote::NodeServer p2psrv(dispatcher, cprotocol, logManager);
     CryptoNote::RpcServer rpcServer(dispatcher, logManager, ccore, p2psrv, cprotocol);
