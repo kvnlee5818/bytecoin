@@ -258,6 +258,7 @@ int main(int argc, char* argv[])
         //iterate through the rest of the transactions
         auto transactions = blocks.transactionHashes;
         for (auto i = transactions.begin(); i != transactions.end(); ++i){
+            std::cout << "Input tx timestamp: " << tx_timestamp << '\n';
             //for each transaction get the details
             TransactionDetails tx_details = ccore.getTransactionDetails(*i);
             uint64_t num_mixin = tx_details.mixin;
@@ -271,12 +272,16 @@ int main(int argc, char* argv[])
 
                 //get the transaction where the mixin comes from
                 //this only works for 1-mixin inputs
+                //i cannot find a place that returns an array of transactions
                 TransactionOutputReferenceDetails tx_out_details = keyin.output;
-                std::cout << "Output reference hash: " << tx_out_details.transactionHash << '\n';
-                //std::cout << "Output reference number: " << tx_out_details.number << '\n';
+                //std::cout << "Input reference hash: " << tx_out_details.transactionHash << '\n';
+                TransactionDetails ref_tx = ccore.getTransactionDetails(tx_out_details.transactionHash);
+                uint64_t ref_tx_timestamp = ref_tx.timestamp;
+                std::cout << "Input reference tx timestamp: " << ref_tx_timestamp << '\n';
+
 
                 std::vector<uint32_t> outputIndexes = input.outputIndexes;
-                std::cout << "Transaction Hash: " << *i << '\n';
+                //std::cout << "Transaction Hash: " << *i << '\n';
                 std::cout << "Input Amount: " << amount << '\n';
                 for (auto index_tracker = outputIndexes.begin(); index_tracker != outputIndexes.end(); ++index_tracker){
                   //add 1 to prevent 0s from appearing, 
