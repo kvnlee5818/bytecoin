@@ -43,6 +43,10 @@
 #include "Serialization/BinaryInputStreamSerializer.h"
 #include "Serialization/BinaryOutputStreamSerializer.h"
 #include "version.h"
+#include <sqlite3.h>
+#include <numeric>
+#include <tuple>
+#include <sstream>
 
 #include <Logging/LoggerManager.h>
 
@@ -66,6 +70,29 @@ namespace
   const command_line::arg_descriptor<bool>        arg_testnet_on  = {"testnet", "Used to deploy test nets. Checkpoints and hardcoded seeds are ignored, "
     "network id is changed. Use it with --data-dir flag. The wallet must be launched with --testnet flag.", false};
 }
+
+sqlite3* dbs;
+char* zErrMsg = 0;
+int rc;
+char* sql;
+
+void setupTable(){
+  std::string sql_second = "PRAGMA synchronous = OFF; \
+  PRAGMA journal_mode = MEMORY; \
+  CREATE TABLE inputs (block_height INTEGER, tx_hash STRING, tx_timestamp INTEGER, num_mixin INTEGER, amount INTEGER, mixin_height INTEGER, mixin_tx STRING, mixin_timestamp INTEGER, mixin_gidx INTEGER, anonset INTEGER);";
+  sql = const_cast<char*>(sql_second.c_str());
+
+  /* Execute SQL statement */
+  rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr, "SQL error: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  }
+  else {
+    fprintf(stderr, "Creation done successfully\n");
+  }
+}
+
 
 bool command_line_preprocessor(const boost::program_options::variables_map& vm, LoggerRef& logger);
 
@@ -232,77 +259,116 @@ int main(int argc, char* argv[])
     ccore.load();
     logger(INFO) << "Core initialized OK";
 
-    //create a map to store, this is like the top global index
-    std::map<uint64_t, uint64_t> availableMixinsMap;
-
     int block_start = 1; 
     //int block_stop = ccore.getTopBlockIndex();
     //int block_start = 1234568;
-    int block_stop = 1000;
+    int block_stop = 100;
     logger(INFO) << "The top block index is: " << block_stop;
+    std::map<std::tuple<uint64_t, uint64_t>, Crypto::Hash> tx_map;
+    std::map<uint64_t, uint64_t> anonset;
+
+    rc = sqlite3_open("/home/yorozuya/test.db", &dbs);
+    if(rc){
+      fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(dbs));
+      exit(0);
+    }
+    else{
+      fprintf(stderr, "Opened database successfully\n");
+    }
+
+    setupTable();
 
     for (int block_height = block_start; block_height <= block_stop; block_height++){
-        auto blocks = ccore.getBlockByIndex(block_height);
-        uint64_t tx_timestamp = blocks.timestamp;
+      Crypto::Hash block_hash = ccore.getBlockHashByIndex(block_height);
+      BlockDetails block_detail = ccore.getBlockDetails(block_hash);
+      std::vector<TransactionDetails> stupe = block_detail.transactions;
+      std::cout << "Block height: " << block_detail.index << '\n';
 
-        //extract the coinbase transaction
-        Transaction coinbase_tx = blocks.baseTransaction;
-        std::vector<TransactionOutput> coinbase_tx_output = coinbase_tx.outputs;
+      for (auto tx_details = stupe.begin(); tx_details != stupe.end(); ++tx_details){
 
-        //update the available 
-        for (auto coinbase_track = coinbase_tx_output.begin(); coinbase_track != coinbase_tx_output.end(); ++coinbase_track){
-            uint64_t coinbase_amount = coinbase_track->amount;
-            availableMixinsMap[coinbase_amount]++;
+        /*  
+            handle the inputs of the transaction over here, also get the transaction
+            from which the mixin originated
+        */
+        bool is_coinbase = false;
+        Crypto::Hash tx_hash = tx_details->hash;
+        std::cout << "Txhash: " << tx_hash << '\n';
+        std::vector<TransactionInputDetails> tx_inputs = tx_details->inputs;
+        uint64_t totalinputamt = tx_details->totalInputsAmount;
+        if (totalinputamt == 0){
+          is_coinbase = true;
+          std::cout << "COINBASE!!!!!" << '\n';
+        }
+        else{
+          for (auto input_tracker = tx_inputs.begin(); input_tracker != tx_inputs.end(); ++input_tracker){
+            KeyInputDetails keyin = boost::get<KeyInputDetails>(*input_tracker);
+            KeyInput input = keyin.input;
+            uint64_t amount = input.amount;
+
+            std::vector<uint32_t> outputIndexes = input.outputIndexes;
+            std::vector<uint32_t> global_outputIndexes(outputIndexes.size());
+            std::partial_sum(outputIndexes.begin(), outputIndexes.end(), global_outputIndexes.begin());
+
+            for (auto index_tracker = global_outputIndexes.begin(); index_tracker != global_outputIndexes.end(); ++index_tracker){
+              std::cout << "Input Amount: " << amount << '\n';
+              std::cout << "Global Index: " << *index_tracker << '\n';
+
+              Crypto::Hash ref_tx = tx_map[std::make_tuple(amount, *index_tracker)];
+              std::cout << "From transaction: " << ref_tx << '\n';
+
+              TransactionDetails ref_tx_details = ccore.getTransactionDetails(ref_tx);
+              uint64_t ref_tx_time = ref_tx_details.timestamp;
+              uint32_t ref_tx_ht = ref_tx_details.blockIndex;
+
+              std::stringstream xx;
+              xx << tx_hash;
+              std::string xxx = xx.str();
+
+              std::stringstream yy;
+              yy << ref_tx;
+              std::string yyy = yy.str();
+
+              std::string sql_second = "insert into inputs (block_height, tx_hash, tx_timestamp, num_mixin, amount, mixin_height, mixin_tx, mixin_timestamp, mixin_gidx, anonset) values(\""
+              + std::to_string(block_height) + "\", \""
+              + xxx + "\", \""
+              + std::to_string(tx_details->timestamp) + "\", \""
+              + std::to_string(tx_details->mixin) + "\", \""
+              + std::to_string(amount) + "\", \""
+              + std::to_string(ref_tx_ht) + "\", \""
+              + yyy + "\", \""
+              + std::to_string(ref_tx_time) + "\", \""
+              + std::to_string(*index_tracker) + "\", \""
+              + std::to_string(anonset[amount]) + "\")";
+              sql = const_cast<char*>(sql_second.c_str());
+              rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+              if (rc != SQLITE_OK) {
+                fprintf(stderr, "SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+              }
+            }
+          }
         }
 
-        //iterate through the rest of the transactions
-        auto transactions = blocks.transactionHashes;
-        for (auto i = transactions.begin(); i != transactions.end(); ++i){
-            std::cout << "Input tx timestamp: " << tx_timestamp << '\n';
-            //for each transaction get the details
-            TransactionDetails tx_details = ccore.getTransactionDetails(*i);
-            uint64_t num_mixin = tx_details.mixin;
-
-            std::vector<TransactionInputDetails> tx_inputs = tx_details.inputs;
-
-            for (auto input_tracker = tx_inputs.begin(); input_tracker != tx_inputs.end(); ++input_tracker){
-                KeyInputDetails keyin = boost::get<KeyInputDetails>(*input_tracker);
-                KeyInput input = keyin.input;
-                uint64_t amount = input.amount;
-
-                //get the transaction where the mixin comes from
-                //this only works for 1-mixin inputs
-                //i cannot find a place that returns an array of transactions
-                TransactionOutputReferenceDetails tx_out_details = keyin.output;
-                //std::cout << "Input reference hash: " << tx_out_details.transactionHash << '\n';
-                TransactionDetails ref_tx = ccore.getTransactionDetails(tx_out_details.transactionHash);
-                uint64_t ref_tx_timestamp = ref_tx.timestamp;
-                std::cout << "Input reference tx timestamp: " << ref_tx_timestamp << '\n';
-
-
-                std::vector<uint32_t> outputIndexes = input.outputIndexes;
-                //std::cout << "Transaction Hash: " << *i << '\n';
-                std::cout << "Input Amount: " << amount << '\n';
-                for (auto index_tracker = outputIndexes.begin(); index_tracker != outputIndexes.end(); ++index_tracker){
-                  //add 1 to prevent 0s from appearing, 
-                  std::cout << "Index: " << (*index_tracker)+1 << '\n';
-                }
-            }
-            std::vector<TransactionOutputDetails> tx_outputs = tx_details.outputs;
-            for (auto output_track = tx_outputs.begin(); output_track != tx_outputs.end(); ++output_track){
-              uint64_t output_amount = (output_track->output).amount;
-              uint64_t output_gidx = output_track->globalIndex;
-              availableMixinsMap[output_amount]=output_gidx;
-            }
+        /*  
+            handle the outputs of the transaction over here.
+            we get the amount output, global index and we update the 
+            available mixins as well known as anonset
+        */
+        std::vector<TransactionOutputDetails> tx_outputs = tx_details->outputs;
+        for (auto output_tracker = tx_outputs.begin(); output_tracker != tx_outputs.end(); ++output_tracker){
+          uint64_t outglobalidx = output_tracker->globalIndex;
+          uint64_t outamt = (output_tracker->output).amount;
+          std::cout << "Output Amount: " << outamt << '\n';
+          std::cout << "Global Index: " << outglobalidx << '\n';
+          std::tuple<uint64_t, uint64_t> key = std::make_tuple(outamt, outglobalidx);
+          tx_map[key] = tx_hash;
+          anonset[outamt] = outglobalidx;
         }
-
-    //availableMixinsMap[tx_out.amount]++;
-
+      }
     }
     logger(INFO) << "I am stopping here, bye.";
+    sqlite3_close(dbs);
     return 0;
-
-
 
     CryptoNote::CryptoNoteProtocolHandler cprotocol(currency, dispatcher, ccore, nullptr, logManager);
     CryptoNote::NodeServer p2psrv(dispatcher, cprotocol, logManager);
@@ -375,3 +441,4 @@ bool command_line_preprocessor(const boost::program_options::variables_map &vm, 
 
   return false;
 }
+
