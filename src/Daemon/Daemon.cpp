@@ -47,12 +47,43 @@
 #include <numeric>
 #include <tuple>
 #include <sstream>
+#include <unordered_map>
+
 
 #include <Logging/LoggerManager.h>
 
 #if defined(WIN32)
 #include <crtdbg.h>
 #endif
+
+#include <boost/tuple/tuple.hpp>
+#include <boost/unordered_map.hpp>
+
+typedef boost::tuples::tuple<uint64_t, uint64_t> Edge;
+
+struct ihash
+    : std::unary_function<Edge, std::size_t>
+{
+    std::size_t operator()(Edge const& e) const
+    {
+        std::size_t seed = 0;
+        boost::hash_combine( seed, e.get<0>() );
+        boost::hash_combine( seed, e.get<1>() );
+        return seed;
+    }
+};
+
+struct iequal_to
+    : std::binary_function<Edge, Edge, bool>
+{
+    bool operator()(Edge const& x, Edge const& y) const
+    {
+        return ( x.get<0>()==y.get<0>() &&
+                 x.get<1>()==y.get<1>());
+    }
+};
+
+typedef boost::unordered_map< Edge, Crypto::Hash, ihash, iequal_to > EdgeMap;
 
 using Common::JsonValue;
 using namespace CryptoNote;
@@ -260,14 +291,14 @@ int main(int argc, char* argv[])
     logger(INFO) << "Core initialized OK";
 
     int block_start = 1; 
-    //int block_stop = ccore.getTopBlockIndex();
+    int block_stop = ccore.getTopBlockIndex();
     //int block_start = 1234568;
-    int block_stop = 100;
+    //int block_stop = 100;
     logger(INFO) << "The top block index is: " << block_stop;
-    std::map<std::tuple<uint64_t, uint64_t>, Crypto::Hash> tx_map;
-    std::map<uint64_t, uint64_t> anonset;
+    EdgeMap tx_map;
+    std::unordered_map<uint64_t, uint64_t> anonset;
 
-    rc = sqlite3_open("/home/yorozuya/test.db", &dbs);
+    rc = sqlite3_open("/home/yorozuya/input.db", &dbs);
     if(rc){
       fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(dbs));
       exit(0);
@@ -277,8 +308,10 @@ int main(int argc, char* argv[])
     }
 
     setupTable();
-
+    sqlite3_exec(dbs, "BEGIN TRANSACTION", NULL, NULL, &zErrMsg);
     for (int block_height = block_start; block_height <= block_stop; block_height++){
+      //sqlite3_exec(dbs, "BEGIN TRANSACTION", NULL, NULL, &zErrMsg);
+
       Crypto::Hash block_hash = ccore.getBlockHashByIndex(block_height);
       BlockDetails block_detail = ccore.getBlockDetails(block_hash);
       std::vector<TransactionDetails> stupe = block_detail.transactions;
@@ -292,12 +325,12 @@ int main(int argc, char* argv[])
         */
         bool is_coinbase = false;
         Crypto::Hash tx_hash = tx_details->hash;
-        std::cout << "Txhash: " << tx_hash << '\n';
+        //std::cout << "Txhash: " << tx_hash << '\n';
         std::vector<TransactionInputDetails> tx_inputs = tx_details->inputs;
         uint64_t totalinputamt = tx_details->totalInputsAmount;
         if (totalinputamt == 0){
           is_coinbase = true;
-          std::cout << "COINBASE!!!!!" << '\n';
+          //std::cout << "COINBASE!!!!!" << '\n';
         }
         else{
           for (auto input_tracker = tx_inputs.begin(); input_tracker != tx_inputs.end(); ++input_tracker){
@@ -310,11 +343,12 @@ int main(int argc, char* argv[])
             std::partial_sum(outputIndexes.begin(), outputIndexes.end(), global_outputIndexes.begin());
 
             for (auto index_tracker = global_outputIndexes.begin(); index_tracker != global_outputIndexes.end(); ++index_tracker){
-              std::cout << "Input Amount: " << amount << '\n';
-              std::cout << "Global Index: " << *index_tracker << '\n';
+              //std::cout << "Input Amount: " << amount << '\n';
+              //std::cout << "Global Index: " << *index_tracker << '\n';
+              Edge ref_key (amount,*index_tracker);
 
-              Crypto::Hash ref_tx = tx_map[std::make_tuple(amount, *index_tracker)];
-              std::cout << "From transaction: " << ref_tx << '\n';
+              Crypto::Hash ref_tx = tx_map[ref_key];
+              //std::cout << "From transaction: " << ref_tx << '\n';
 
               TransactionDetails ref_tx_details = ccore.getTransactionDetails(ref_tx);
               uint64_t ref_tx_time = ref_tx_details.timestamp;
@@ -358,13 +392,21 @@ int main(int argc, char* argv[])
         for (auto output_tracker = tx_outputs.begin(); output_tracker != tx_outputs.end(); ++output_tracker){
           uint64_t outglobalidx = output_tracker->globalIndex;
           uint64_t outamt = (output_tracker->output).amount;
-          std::cout << "Output Amount: " << outamt << '\n';
-          std::cout << "Global Index: " << outglobalidx << '\n';
-          std::tuple<uint64_t, uint64_t> key = std::make_tuple(outamt, outglobalidx);
+          //std::cout << "Output Amount: " << outamt << '\n';
+          //std::cout << "Global Index: " << outglobalidx << '\n';
+          Edge key (outamt,outglobalidx);
           tx_map[key] = tx_hash;
           anonset[outamt] = outglobalidx;
         }
       }
+    }
+    sqlite3_exec(dbs, "END TRANSACTION", NULL, NULL, &zErrMsg);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "SQL error: %s\n", zErrMsg);
+      sqlite3_free(zErrMsg);
+    }
+    else{
+      fprintf(stdout, "Transaction committed successfully\n");
     }
     logger(INFO) << "I am stopping here, bye.";
     sqlite3_close(dbs);
@@ -441,4 +483,3 @@ bool command_line_preprocessor(const boost::program_options::variables_map &vm, 
 
   return false;
 }
-
