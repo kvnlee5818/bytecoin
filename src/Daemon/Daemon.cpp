@@ -293,12 +293,13 @@ int main(int argc, char* argv[])
     int block_start = 1; 
     int block_stop = ccore.getTopBlockIndex();
     //int block_start = 1234568;
-    //int block_stop = 100;
+    //int block_stop = 1000;
     logger(INFO) << "The top block index is: " << block_stop;
     EdgeMap tx_map;
     std::unordered_map<uint64_t, uint64_t> anonset;
+    std::unordered_map<Crypto::Hash, TransactionDetails> detail_map;
 
-    rc = sqlite3_open("/home/yorozuya/input.db", &dbs);
+    rc = sqlite3_open("/home/yorozuya/inputs.db", &dbs);
     if(rc){
       fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(dbs));
       exit(0);
@@ -325,6 +326,8 @@ int main(int argc, char* argv[])
         */
         bool is_coinbase = false;
         Crypto::Hash tx_hash = tx_details->hash;
+        detail_map[tx_hash] = *tx_details;
+
         //std::cout << "Txhash: " << tx_hash << '\n';
         std::vector<TransactionInputDetails> tx_inputs = tx_details->inputs;
         uint64_t totalinputamt = tx_details->totalInputsAmount;
@@ -350,7 +353,7 @@ int main(int argc, char* argv[])
               Crypto::Hash ref_tx = tx_map[ref_key];
               //std::cout << "From transaction: " << ref_tx << '\n';
 
-              TransactionDetails ref_tx_details = ccore.getTransactionDetails(ref_tx);
+              TransactionDetails ref_tx_details = detail_map[ref_tx];
               uint64_t ref_tx_time = ref_tx_details.timestamp;
               uint32_t ref_tx_ht = ref_tx_details.blockIndex;
 
