@@ -108,10 +108,38 @@ int rc;
 char* sql;
 
 void setupTable(){
-  std::string sql_second = "PRAGMA synchronous = OFF; \
+  std::string sql_second_0 = "PRAGMA synchronous = OFF; \
   PRAGMA journal_mode = MEMORY; \
-  CREATE TABLE inputs (block_height INTEGER, tx_hash STRING, tx_timestamp INTEGER, num_mixin INTEGER, amount INTEGER, mixin_height INTEGER, mixin_tx STRING, mixin_timestamp INTEGER, mixin_gidx INTEGER, anonset INTEGER);";
-  sql = const_cast<char*>(sql_second.c_str());
+  CREATE TABLE inputs (iid INTEGER, mixin INTEGER, value INTEGER, anonset INTEGER);";
+  sql = const_cast<char*>(sql_second_0.c_str());
+
+  /* Execute SQL statement */
+  rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr, "SQL error: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  }
+  else {
+    fprintf(stderr, "Creation done successfully\n");
+  }
+  std::string sql_second_1 = "PRAGMA synchronous = OFF; \
+  PRAGMA journal_mode = MEMORY; \
+  CREATE TABLE outputs (oid STRING, amount INTEGER, gidx INTEGER);";
+  sql = const_cast<char*>(sql_second_1.c_str());
+
+  /* Execute SQL statement */
+  rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr, "SQL error: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  }
+  else {
+    fprintf(stderr, "Creation done successfully\n");
+  }
+    std::string sql_second_2 = "PRAGMA synchronous = OFF; \
+  PRAGMA journal_mode = MEMORY; \
+  CREATE TABLE refs (iid INTEGER, oid STRING);";
+  sql = const_cast<char*>(sql_second_2.c_str());
 
   /* Execute SQL statement */
   rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
@@ -295,11 +323,9 @@ int main(int argc, char* argv[])
     //int block_start = 1234568;
     //int block_stop = 1000;
     logger(INFO) << "The top block index is: " << block_stop;
-    EdgeMap tx_map;
     std::unordered_map<uint64_t, uint64_t> anonset;
-    std::unordered_map<Crypto::Hash, TransactionDetails> detail_map;
 
-    rc = sqlite3_open("/home/yorozuya/inputs.db", &dbs);
+    rc = sqlite3_open("/home/yorozuya/test.db", &dbs);
     if(rc){
       fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(dbs));
       exit(0);
@@ -309,6 +335,7 @@ int main(int argc, char* argv[])
     }
 
     setupTable();
+    int counter = 0;
     sqlite3_exec(dbs, "BEGIN TRANSACTION", NULL, NULL, &zErrMsg);
     for (int block_height = block_start; block_height <= block_stop; block_height++){
       //sqlite3_exec(dbs, "BEGIN TRANSACTION", NULL, NULL, &zErrMsg);
@@ -324,15 +351,11 @@ int main(int argc, char* argv[])
             handle the inputs of the transaction over here, also get the transaction
             from which the mixin originated
         */
-        bool is_coinbase = false;
-        Crypto::Hash tx_hash = tx_details->hash;
-        detail_map[tx_hash] = *tx_details;
 
         //std::cout << "Txhash: " << tx_hash << '\n';
         std::vector<TransactionInputDetails> tx_inputs = tx_details->inputs;
         uint64_t totalinputamt = tx_details->totalInputsAmount;
         if (totalinputamt == 0){
-          is_coinbase = true;
           //std::cout << "COINBASE!!!!!" << '\n';
         }
         else{
@@ -342,40 +365,29 @@ int main(int argc, char* argv[])
             uint64_t amount = input.amount;
 
             std::vector<uint32_t> outputIndexes = input.outputIndexes;
-            std::vector<uint32_t> global_outputIndexes(outputIndexes.size());
+            int mixin = outputIndexes.size();
+            std::vector<uint32_t> global_outputIndexes(mixin);
             std::partial_sum(outputIndexes.begin(), outputIndexes.end(), global_outputIndexes.begin());
+
+            std::string sql_second = "insert into inputs (iid, mixin, value, anonset) values(\""
+            + std::to_string(counter) + "\", \""
+            + std::to_string(mixin-1) + "\", \""
+            + std::to_string(amount) + "\", \""
+            + std::to_string(anonset[amount]) + "\")";
+            sql = const_cast<char*>(sql_second.c_str());
+            rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+            if (rc != SQLITE_OK) {
+              fprintf(stderr, "SQL error: %s\n", zErrMsg);
+              sqlite3_free(zErrMsg);
+            }
 
             for (auto index_tracker = global_outputIndexes.begin(); index_tracker != global_outputIndexes.end(); ++index_tracker){
               //std::cout << "Input Amount: " << amount << '\n';
               //std::cout << "Global Index: " << *index_tracker << '\n';
-              Edge ref_key (amount,*index_tracker);
-
-              Crypto::Hash ref_tx = tx_map[ref_key];
               //std::cout << "From transaction: " << ref_tx << '\n';
-
-              TransactionDetails ref_tx_details = detail_map[ref_tx];
-              uint64_t ref_tx_time = ref_tx_details.timestamp;
-              uint32_t ref_tx_ht = ref_tx_details.blockIndex;
-
-              std::stringstream xx;
-              xx << tx_hash;
-              std::string xxx = xx.str();
-
-              std::stringstream yy;
-              yy << ref_tx;
-              std::string yyy = yy.str();
-
-              std::string sql_second = "insert into inputs (block_height, tx_hash, tx_timestamp, num_mixin, amount, mixin_height, mixin_tx, mixin_timestamp, mixin_gidx, anonset) values(\""
-              + std::to_string(block_height) + "\", \""
-              + xxx + "\", \""
-              + std::to_string(tx_details->timestamp) + "\", \""
-              + std::to_string(tx_details->mixin) + "\", \""
-              + std::to_string(amount) + "\", \""
-              + std::to_string(ref_tx_ht) + "\", \""
-              + yyy + "\", \""
-              + std::to_string(ref_tx_time) + "\", \""
-              + std::to_string(*index_tracker) + "\", \""
-              + std::to_string(anonset[amount]) + "\")";
+              std::string sql_second = "insert into refs (iid, oid) values(\""
+              + std::to_string(counter) + "\", \""
+              + std::to_string(amount) + "-" + std::to_string(*index_tracker) + "\")";
               sql = const_cast<char*>(sql_second.c_str());
               rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
               if (rc != SQLITE_OK) {
@@ -383,6 +395,7 @@ int main(int argc, char* argv[])
                 sqlite3_free(zErrMsg);
               }
             }
+            counter++;
           }
         }
 
@@ -397,9 +410,18 @@ int main(int argc, char* argv[])
           uint64_t outamt = (output_tracker->output).amount;
           //std::cout << "Output Amount: " << outamt << '\n';
           //std::cout << "Global Index: " << outglobalidx << '\n';
-          Edge key (outamt,outglobalidx);
-          tx_map[key] = tx_hash;
           anonset[outamt] = outglobalidx;
+          std::string sql_second = "insert into outputs (oid, amount, gidx) values(\""
+          + std::to_string(outamt) + "-" + std::to_string(outglobalidx) + "\", \""
+          + std::to_string(outamt) + "\", \""
+          + std::to_string(outglobalidx) + "\")";
+
+          sql = const_cast<char*>(sql_second.c_str());
+          rc = sqlite3_exec(dbs, sql, NULL, NULL, &zErrMsg);
+          if (rc != SQLITE_OK) {
+            fprintf(stderr, "SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+          }
         }
       }
     }
